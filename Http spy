@@ -1,0 +1,81 @@
+-- ================================================
+-- 🕵️‍♂️ НЕВИДИМЫЙ HTTP SPY (ТОЛЬКО ФАЙЛОВЫЕ ЛОГИ)
+-- ================================================
+
+-- 1. Скрытое хранилище оригинальных функций
+local SECURE_STORAGE = {
+    LOADSTRING = loadstring,
+    HTTPGET = game.HttpGet,
+    HTTPPOST = game.HttpPost,
+    GETASYNC = game:GetService("HttpService").GetAsync,
+    POSTASYNC = game:GetService("HttpService").PostAsync
+}
+
+-- 2. Формат записи логов в файл
+local function WriteToLog(reqType, url, data)
+    local logEntry = os.date("[%H:%M:%S]")
+    
+    if reqType == "LOADSTRING" then
+        logEntry = logEntry.." [LOADSTRING] 🔗 "..url
+    elseif reqType:find("GET") then
+        logEntry = logEntry.." ["..reqType.."] 🌐 "..url
+    elseif reqType:find("POST") then
+        logEntry = logEntry.." ["..reqType.."] 📤 "..url.." | 📝 "..tostring(data):sub(1, 100)
+    end
+
+    pcall(function()
+        appendfile("http_spy_ultra.txt", logEntry.."\n")
+    end)
+end
+
+-- 3. Перехватчики (без вывода в консоль)
+-- Loadstring
+loadstring = function(code, ...)
+    for url in code:gmatch("https?://[%w-_%.%?%.:/%+=&]+") do
+        WriteToLog("LOADSTRING", url)
+    end
+    return SECURE_STORAGE.LOADSTRING(code, ...)
+end
+
+-- HttpGet
+game.HttpGet = function(self, url, ...)
+    WriteToLog("HTTP-GET", url)
+    return SECURE_STORAGE.HTTPGET(self, url, ...)
+end
+
+-- HttpPost
+game.HttpPost = function(self, url, data, ...)
+    WriteToLog("HTTP-POST", url, data)
+    return SECURE_STORAGE.HTTPPOST(self, url, data, ...)
+end
+
+-- HttpService
+local HttpService = game:GetService("HttpService")
+HttpService.GetAsync = function(self, url, ...)
+    WriteToLog("HTTPSERVICE-GET", url)
+    return SECURE_STORAGE.GETASYNC(self, url, ...)
+end
+
+HttpService.PostAsync = function(self, url, data, ...)
+    WriteToLog("HTTPSERVICE-POST", url, data)
+    return SECURE_STORAGE.POSTASYNC(self, url, data, ...)
+end
+
+-- 4. Защита от античитов (тихий режим)
+task.spawn(function()
+    while task.wait(3) do
+        pcall(function()
+            _G.print = function() end
+            _G.warn = function() end
+        end)
+    end
+end)
+
+-- 5. Перехват syn.request (если доступен)
+if syn and syn.request and not SECURE_STORAGE.SYNREQUEST then
+    SECURE_STORAGE.SYNREQUEST = syn.request
+    syn.request = function(args)
+        WriteToLog("SYN-"..(args.Method or "GET"), args.Url, args.Body)
+        return SECURE_STORAGE.SYNREQUEST(args)
+    end
+end
