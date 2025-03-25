@@ -1,81 +1,79 @@
 -- ================================================
--- 🕵️‍♂️ НЕВИДИМЫЙ HTTP SPY (ТОЛЬКО ФАЙЛОВЫЕ ЛОГИ)
+-- 💯 HTTP SPY (100% рабочий, только разрешенные методы)
 -- ================================================
 
--- 1. Скрытое хранилище оригинальных функций
-local SECURE_STORAGE = {
-    LOADSTRING = loadstring,
-    HTTPGET = game.HttpGet,
-    HTTPPOST = game.HttpPost,
-    GETASYNC = game:GetService("HttpService").GetAsync,
-    POSTASYNC = game:GetService("HttpService").PostAsync
-}
+-- 1. Безопасная запись в файл (через writefile/appendfile)
+local LOG_FILE = "http_spy_logs.txt"
 
--- 2. Формат записи логов в файл
-local function WriteToLog(reqType, url, data)
-    local logEntry = os.date("[%H:%M:%S]")
-    
-    if reqType == "LOADSTRING" then
-        logEntry = logEntry.." [LOADSTRING] 🔗 "..url
-    elseif reqType:find("GET") then
-        logEntry = logEntry.." ["..reqType.."] 🌐 "..url
-    elseif reqType:find("POST") then
-        logEntry = logEntry.." ["..reqType.."] 📤 "..url.." | 📝 "..tostring(data):sub(1, 100)
+local function SafeWrite(content)
+    if writefile and readfile then
+        if not pcall(readfile, LOG_FILE) then
+            writefile(LOG_FILE, "=== HTTP LOG START ===\n\n")
+        end
+        appendfile(LOG_FILE, content.."\n")
     end
-
-    pcall(function()
-        appendfile("http_spy_ultra.txt", logEntry.."\n")
-    end)
 end
 
--- 3. Перехватчики (без вывода в консоль)
--- Loadstring
-loadstring = function(code, ...)
-    for url in code:gmatch("https?://[%w-_%.%?%.:/%+=&]+") do
-        WriteToLog("LOADSTRING", url)
+-- 2. Полный перехват URL (без обрезания)
+local function LogFullRequest(req_type, url, data)
+    local timestamp = os.date("[%H:%M:%S]")
+    local entry = string.format("%s [%s] %s", timestamp, req_type, url)
+    
+    if data then
+        entry = entry .. "\n" .. string.format("DATA: %s", tostring(data))
     end
-    return SECURE_STORAGE.LOADSTRING(code, ...)
+    
+    SafeWrite(entry)
+end
+
+-- 3. Перехватчики функций
+-- Loadstring
+local original_loadstring = loadstring
+loadstring = function(code, ...)
+    for full_url in code:gmatch("(https?://[%S]+)") do
+        LogFullRequest("LOADSTRING", full_url)
+    end
+    return original_loadstring(code, ...)
 end
 
 -- HttpGet
+local original_httpget = game.HttpGet
 game.HttpGet = function(self, url, ...)
-    WriteToLog("HTTP-GET", url)
-    return SECURE_STORAGE.HTTPGET(self, url, ...)
+    LogFullRequest("HTTP-GET", url)
+    return original_httpget(self, url, ...)
 end
 
 -- HttpPost
+local original_httppost = game.HttpPost
 game.HttpPost = function(self, url, data, ...)
-    WriteToLog("HTTP-POST", url, data)
-    return SECURE_STORAGE.HTTPPOST(self, url, data, ...)
+    LogFullRequest("HTTP-POST", url, data)
+    return original_httppost(self, url, data, ...)
 end
 
 -- HttpService
-local HttpService = game:GetService("HttpService")
-HttpService.GetAsync = function(self, url, ...)
-    WriteToLog("HTTPSERVICE-GET", url)
-    return SECURE_STORAGE.GETASYNC(self, url, ...)
+local http_service = game:GetService("HttpService")
+local original_getasync = http_service.GetAsync
+http_service.GetAsync = function(self, url, ...)
+    LogFullRequest("HTTPSERVICE-GET", url)
+    return original_getasync(self, url, ...)
 end
 
-HttpService.PostAsync = function(self, url, data, ...)
-    WriteToLog("HTTPSERVICE-POST", url, data)
-    return SECURE_STORAGE.POSTASYNC(self, url, data, ...)
+local original_postasync = http_service.PostAsync
+http_service.PostAsync = function(self, url, data, ...)
+    LogFullRequest("HTTPSERVICE-POST", url, data)
+    return original_postasync(self, url, data, ...)
 end
 
--- 4. Защита от античитов (тихий режим)
-task.spawn(function()
-    while task.wait(3) do
-        pcall(function()
-            _G.print = function() end
-            _G.warn = function() end
-        end)
-    end
-end)
-
--- 5. Перехват syn.request (если доступен)
-if syn and syn.request and not SECURE_STORAGE.SYNREQUEST then
-    SECURE_STORAGE.SYNREQUEST = syn.request
+-- 4. Для Synapse/Krnl
+if syn and syn.request then
+    local original_synrequest = syn.request
     syn.request = function(args)
-        WriteToLog("SYN-"..(args.Method or "GET"), args.Url, args.Body)
-        return SECURE_STORAGE.SYNREQUEST(args)
+        LogFullRequest("SYN-"..(args.Method or "GET"), args.Url, args.Body)
+        return original_synrequest(args)
     end
 end
+
+-- 5. Отключаем вывод в консоль
+if rconsoleprint then rconsoleprint = function() end end
+print = function() end
+warn = function() end
