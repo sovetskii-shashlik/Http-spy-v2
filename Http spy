@@ -1,79 +1,118 @@
 -- ================================================
--- 💯 HTTP SPY (100% рабочий, только разрешенные методы)
+-- 💯 HTTP SPY (Улучшенная версия с обходом VM и метатаблиц)
 -- ================================================
 
--- 1. Безопасная запись в файл (через writefile/appendfile)
+-- 1. Безопасная запись в файл
 local LOG_FILE = "http_spy_logs.txt"
 
 local function SafeWrite(content)
-    if writefile and readfile then
-        if not pcall(readfile, LOG_FILE) then
-            writefile(LOG_FILE, "=== HTTP LOG START ===\n\n")
+    local success, write = pcall(function()
+        if writefile and readfile then
+            if not pcall(readfile, LOG_FILE) then
+                writefile(LOG_FILE, "=== HTTP LOG START ===\n\n")
+            end
+            appendfile(LOG_FILE, content.."\n")
         end
-        appendfile(LOG_FILE, content.."\n")
+    end)
+    if not success then
+        -- Резервный метод записи через rawset, если стандартные функции заблокированы
+        rawset(_G, "http_spy_log", (rawget(_G, "http_spy_log") or "") .. content .. "\n")
     end
 end
 
--- 2. Полный перехват URL (без обрезания)
+-- 2. Расширенное логирование с обработкой сложных данных
 local function LogFullRequest(req_type, url, data)
     local timestamp = os.date("[%H:%M:%S]")
-    local entry = string.format("%s [%s] %s", timestamp, req_type, url)
+    local entry = string.format("%s [%s] %s", timestamp, req_type, url or "nil")
     
     if data then
-        entry = entry .. "\n" .. string.format("DATA: %s", tostring(data))
+        local data_str = type(data) == "table" and pcall(function() return game:GetService("HttpService"):JSONEncode(data) end) 
+            and data or tostring(data)
+        entry = entry .. "\n" .. string.format("DATA: %s", data_str)
     end
     
     SafeWrite(entry)
 end
 
--- 3. Перехватчики функций
+-- 3. Универсальный обход VM и метатаблиц
+local function HookFunction(original, hook, method_name)
+    local mt = getrawmetatable(original) or {}
+    local new_func = function(...)
+        hook(...)
+        if mt.__call then
+            return mt.__call(original, ...)
+        end
+        return original(...)
+    end
+    
+    if mt.__index or mt.__newindex then
+        setrawmetatable(original, {
+            __call = new_func,
+            __index = mt.__index,
+            __newindex = mt.__newindex
+        })
+    else
+        return new_func
+    end
+    return new_func
+end
+
+-- 4. Перехватчики функций с обходом VM
 -- Loadstring
 local original_loadstring = loadstring
-loadstring = function(code, ...)
-    for full_url in code:gmatch("(https?://[%S]+)") do
-        LogFullRequest("LOADSTRING", full_url)
+loadstring = HookFunction(original_loadstring, function(code, ...)
+    if type(code) == "string" then
+        for full_url in code:gmatch("(https?://[%S]+)") do
+            LogFullRequest("LOADSTRING", full_url)
+        end
     end
-    return original_loadstring(code, ...)
-end
+end, "loadstring")
 
 -- HttpGet
 local original_httpget = game.HttpGet
-game.HttpGet = function(self, url, ...)
+game.HttpGet = HookFunction(original_httpget, function(self, url, ...)
     LogFullRequest("HTTP-GET", url)
-    return original_httpget(self, url, ...)
-end
+end, "HttpGet")
 
 -- HttpPost
 local original_httppost = game.HttpPost
-game.HttpPost = function(self, url, data, ...)
+game.HttpPost = HookFunction(original_httppost, function(self, url, data, ...)
     LogFullRequest("HTTP-POST", url, data)
-    return original_httppost(self, url, data, ...)
-end
+end, "HttpPost")
 
 -- HttpService
 local http_service = game:GetService("HttpService")
 local original_getasync = http_service.GetAsync
-http_service.GetAsync = function(self, url, ...)
+http_service.GetAsync = HookFunction(original_getasync, function(self, url, ...)
     LogFullRequest("HTTPSERVICE-GET", url)
-    return original_getasync(self, url, ...)
-end
+end, "GetAsync")
 
 local original_postasync = http_service.PostAsync
-http_service.PostAsync = function(self, url, data, ...)
+http_service.PostAsync = HookFunction(original_postasync, function(self, url, data, ...)
     LogFullRequest("HTTPSERVICE-POST", url, data)
-    return original_postasync(self, url, data, ...)
-end
+end, "PostAsync")
 
--- 4. Для Synapse/Krnl
+-- 5. Поддержка Synapse/Krnl с обходом VM
 if syn and syn.request then
     local original_synrequest = syn.request
-    syn.request = function(args)
-        LogFullRequest("SYN-"..(args.Method or "GET"), args.Url, args.Body)
-        return original_synrequest(args)
+    syn.request = HookFunction(original_synrequest, function(args)
+        local method = args.Method or "GET"
+        LogFullRequest("SYN-"..method, args.Url, args.Body)
+    end, "syn.request")
+end
+
+-- 6. Дополнительный перехват через rawget/rawset для защищенных сред
+local function DeepHook(obj, method, hook_func)
+    local original = rawget(obj, method)
+    if original then
+        rawset(obj, method, HookFunction(original, hook_func, method))
     end
 end
 
--- 5. Отключаем вывод в консоль
+DeepHook(game, "HttpGet", function(self, url, ...) LogFullRequest("DEEP-HTTP-GET", url) end)
+DeepHook(http_service, "GetAsync", function(self, url, ...) LogFullRequest("DEEP-HTTPSERVICE-GET", url) end)
+
+-- 7. Отключаем вывод в консоль
 if rconsoleprint then rconsoleprint = function() end end
 print = function() end
 warn = function() end
