@@ -1,4 +1,4 @@
-local LOG_FILE = "ShashlikEx/http_spy_logs.txt"
+local LOG_FILE = "MihaLogger/ShashlikEx/http_spy_logs.txt"
 
 local function SafeWrite(content)
     local success, write = pcall(function()
